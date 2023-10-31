@@ -1,8 +1,6 @@
 import { ref, computed } from "vue";
 import { defineStore, storeToRefs } from "pinia";
-import type { Types } from "ably";
-import { Realtime } from "ably/promises";
-import type { PizzaWorkflow } from "@/types/PizzaWorkflow";
+import type { PizzaWorkflow, OrderEvent } from "@/types/PizzaWorkflow";
 import OrderImage from "../assets/Order.png";
 import PizzaAndDrinkImage from "../assets/PizzaAndDrink.png";
 import PizzaInOvenImage from "../assets/PizzaInOven.png";
@@ -12,10 +10,24 @@ import DeliveryImage from "../assets/Delivery.png";
 import DeliveredImage from "../assets/Map.gif";
 import { type Pizza, PizzaType, type Order } from "@/types/Order";
 
+import * as esm6 from '../../node_modules/@stomp/stompjs/esm6/index';                                                                                                                                                           
+                                                                                                                                                                                                                             
+declare global {                                                                                                                                                                                                             
+    namespace StompJs {                                                                                                                                                                                                      
+        export import Client = esm6.Client;                                                                                                                                                                                  
+        export import Frame = esm6.Frame;                                                                                                                                                                                    
+        export import Message = esm6.Message;                                                                                                                                                                                
+        export import Parser = esm6.Parser;                                                                                                                                                                                  
+        export import StompConfig = esm6.StompConfig;                                                                                                                                                                        
+        export import StompHeaders = esm6.StompHeaders;                                                                                                                                                                      
+        export import StompSubscription = esm6.StompSubscription;                                                                                                                                                            
+        export import Transaction = esm6.Transaction;                                                                                                                                                                        
+    }                                                                                                                                                                                                                        
+}
+
 export const pizzaProcessStore = defineStore("pizza-process", {
   state: (): PizzaWorkflow => ({
-    realtimeClient: undefined,
-    channelInstance: undefined,
+    wsClient: null,
     isConnected: false,
     channelPrefix: "pizza-process",
     clientId: "",
@@ -85,35 +97,64 @@ export const pizzaProcessStore = defineStore("pizza-process", {
     },
     async createRealtimeConnection(clientId: string, order: Order) {
       if (!this.isConnected) {
-        this.realtimeClient = new Realtime.Promise({
-          authUrl: `/api/CreateTokenRequest/${clientId}`,
-          echoMessages: false,
+        this.wsClient = new StompJs.Client({
+          brokerURL: 'ws://localhost:8080/ws'
         });
-        this.realtimeClient.connection.on(
-          "connected",
-          async (message: Types.ConnectionStateChange) => {
-            this.isConnected = true;
-            this.attachToChannel(order.id);
-            if (!this.isOrderPlaced) {
-              await this.placeOrder(order);
-              this.$state.isOrderPlaced = true;
-            }
-          }
-        );
 
-        this.realtimeClient.connection.on("disconnected", () => {
-          this.$state.isConnected = false;
-        });
-        this.realtimeClient.connection.on("closed", () => {
-          this.$state.isConnected = false;
-        });
+        this.wsClient.onConnect = (frame) => {
+          console.log('Connected: ' + frame);
+          this.wsClient.subscribe('/topic/events', (event) => {
+              console.log(JSON.stringify(event));
+          });
+      };
+      
+      this.wsClient.onWebSocketError = (error) => {
+          console.error('Error with websocket', error);
+      };
+
+      this.wsClient.activate();
+        // new WebSocket("ws://localhost:8080/ws");
+        // this.wsClient.onerror = (message) => {
+        //   console.log(`Error: ${JSON.stringify(message)}`)
+        // };
+        // this.wsClient.onmessage = (event) => {    
+        //     console.log(`Received: ${event}`)
+        // };
+        
+        
+        // this.wsClient.onmessage = (event) => {
+        //   this.events.push(event.data);
+        // };
+        // this.realtimeClient = new Realtime.Promise({
+        //   authUrl: `/api/CreateTokenRequest/${clientId}`,
+        //   echoMessages: false,
+        // });
+        // this.realtimeClient.connection.on(
+        //   "connected",
+        //   async (message: Types.ConnectionStateChange) => {
+        //     this.isConnected = true;
+        //     this.attachToChannel(order.id);
+        //     if (!this.isOrderPlaced) {
+        //       await this.placeOrder(order);
+        //       this.$state.isOrderPlaced = true;
+        //     }
+        //   }
+        // );
+
+        // this.realtimeClient.connection.on("disconnected", () => {
+        //   this.$state.isConnected = false;
+        // });
+        // this.realtimeClient.connection.on("closed", () => {
+        //   this.$state.isConnected = false;
+        // });
+
       } else {
         this.attachToChannel(this.orderId);
       }
     },
 
     disconnect() {
-      this.realtimeClient?.connection.close();
+      this.wsClient?.deactivate();
     },
 
     async placeOrder(order: Order) {
@@ -136,50 +177,37 @@ export const pizzaProcessStore = defineStore("pizza-process", {
 
     attachToChannel(orderId: string) {
       const channelName = `pizza-workflow:${orderId}`;
-      this.$state.channelInstance = this.realtimeClient?.channels.get(
-        channelName,
-        { params: { rewind: "2m" } }
-      );
+      // this.$state.channelInstance = this.realtimeClient?.channels.get(
+      //   channelName,
+      //   { params: { rewind: "2m" } }
+      // );
       this.subscribeToMessages();
     },
 
     subscribeToMessages() {
-      this.channelInstance?.subscribe(
-        "order-placed",
-        (message: Types.Message) => {
-          this.handleOrderPlaced(message);
+      this.wsClient.onmessage = (event) => {
+        if(event.data.eventtype == "order-placed"){
+          this.handleOrderPlaced(event);
         }
-      );
-      this.channelInstance?.subscribe(
-        "items-in-stock",
-        (message: Types.Message) => {
-          this.handleItemsInStock(message);
+        if(event.data.eventtype == "items-in-stock"){
+          this.handleItemsInStock(event);
         }
-      );
-      this.channelInstance?.subscribe(
-        "items-not-in-stock",
-        (message: Types.Message) => {
-          this.handleItemsNotInStock(message);
+        if(event.data.eventtype == "items-not-in-stock"){
+          this.handleItemsNotInStock(event);
         }
-      );
-      this.channelInstance?.subscribe(
-        "order-in-preparation",
-        (message: Types.Message) => {
-          this.handleOrderInPreperation(message);
+        if(event.data.eventtype == "order-in-preparation"){
+          this.handleOrderInPreperation(event);
         }
-      );
-      this.channelInstance?.subscribe(
-        "order-completed",
-        (message: Types.Message) => {
-          this.handleOrderCompleted(message);
+        if(event.data.eventtype == "order-completed"){
+          this.handleOrderCompleted(event);
         }
-      );
+      };
     },
 
-    handleOrderPlaced(message: Types.Message) {
+    handleOrderPlaced(event: OrderEvent) {
       this.$patch({
         orderPlacedState: {
-          orderId: message.data.id,
+          orderId: event.order.id,
           isDisabled: false,
           isCurrentState: true,
         },
@@ -189,10 +217,10 @@ export const pizzaProcessStore = defineStore("pizza-process", {
       });
     },
 
-    handleItemsInStock(message: Types.Message) {
+    handleItemsInStock(event: OrderEvent) {
       this.$patch({
         inStockState: {
-          orderId: message.data.id,
+          orderId: event.order.id,
           isDisabled: false,
           isCurrentState: true,
         },
@@ -205,10 +233,10 @@ export const pizzaProcessStore = defineStore("pizza-process", {
       });
     },
 
-    handleItemsNotInStock(message: Types.Message) {
+    handleItemsNotInStock(event: OrderEvent) {
       this.$patch({
         notInStockState: {
-          orderId: message.data.id,
+          orderId: event.order.id,
           isDisabled: false,
           isCurrentState: true,
         },
@@ -221,10 +249,10 @@ export const pizzaProcessStore = defineStore("pizza-process", {
       });
     },
 
-    handleOrderInPreperation(message: Types.Message) {
+    handleOrderInPreperation(event: OrderEvent) {
       this.$patch({
         inPreparationState: {
-          orderId: message.data.id,
+          orderId: event.order.id,
           isDisabled: false,
           isCurrentState: true,
         },
@@ -237,10 +265,10 @@ export const pizzaProcessStore = defineStore("pizza-process", {
       });
     },
 
-    handleOrderCompleted(message: Types.Message) {
+    handleOrderCompleted(event: OrderEvent) {
       this.$patch({
         completedState: {
-          orderId: message.data.id,
+          orderId: event.order.id,
           isDisabled: false,
           isCurrentState: true,
         },

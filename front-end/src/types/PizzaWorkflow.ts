@@ -1,6 +1,6 @@
-import type { Types } from "ably";
 import type { WorkflowState } from "./WorkflowState";
-import type { OrderItem } from "./Order";
+import type { Order, OrderItem } from "./Order";
+
 
 export type PizzaWorkflow = RealtimeState & {
   orderItems: OrderItem[];
@@ -17,8 +17,13 @@ export type PizzaWorkflow = RealtimeState & {
 };
 
 export type RealtimeState = {
-  realtimeClient: Types.RealtimePromise | undefined;
-  channelInstance: Types.RealtimeChannelPromise | undefined;
+  wsClient: StompJs.Client;
+  events: [];
   isConnected: boolean;
   channelPrefix: string;
 };
+
+export type OrderEvent = {
+  eventType: string;
+  order: Order;
+}
